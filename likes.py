@@ -8,12 +8,14 @@ import time
 API_URL = "https://api.yodayo.com/v1/notifications"
 LIMIT = 500
 
+
 def authenticate_with_token(access_token):
     session = requests.Session()
     jar = requests.cookies.RequestsCookieJar()
     jar.set("access_token", access_token)
     session.cookies = jar
     return session
+
 
 def process_liked_notification(notification, user_likes):
     name = notification["user_profile"]["name"]
@@ -22,6 +24,7 @@ def process_liked_notification(notification, user_likes):
 
     user_likes[name][(resource_uuid, created_at)] += 1
 
+
 def process_commented_notification(notification, user_comments, resource_comments):
     name = notification["user_profile"]["name"]
     resource_uuid = notification["resource_uuid"]
@@ -29,9 +32,11 @@ def process_commented_notification(notification, user_comments, resource_comment
     user_comments[name] += 1
     resource_comments[resource_uuid] += 1
 
+
 def process_collected_notification(notification, resource_collected):
     resource_uuid = notification["resource_uuid"]
     resource_collected[resource_uuid] += 1
+
 
 def generate_likes_dataframe(user_likes):
     liked_data = []
@@ -54,6 +59,7 @@ def generate_likes_dataframe(user_likes):
     likes_df = likes_df.sort_values(by="created_at", ascending=False)
 
     return likes_df
+
 
 def get_followers(session, user_id):
     followers = []
@@ -79,36 +85,69 @@ def analyze_likes(user_likes, followers, follower_like_counts):
     users_with_no_likes_count = len(followers_no_likes)
     total_followers = len(follower_names)
     st.write(f"Followers who didn't leave any likes: {followers_no_likes}")
-    st.write(f"{users_with_no_likes_count} ({users_with_no_likes_count/total_followers*100:.2f}%) out of {total_followers} followers didn't leave any likes")
+    st.write(
+        f"{users_with_no_likes_count} ({users_with_no_likes_count/total_followers*100:.2f}%) out of {total_followers} followers didn't leave any likes"
+    )
 
     likes_by_followers = likes_df[likes_df["actor_uuid"].isin(follower_names)].shape[0]
-    likes_by_non_followers = likes_df[~likes_df["actor_uuid"].isin(follower_names)].shape[0]
+    likes_by_non_followers = likes_df[
+        ~likes_df["actor_uuid"].isin(follower_names)
+    ].shape[0]
     total_likes = likes_by_followers + likes_by_non_followers
 
-    st.write(f"Likes by followers: {likes_by_followers} ({likes_by_followers/total_likes*100:.2f}%)")
-    st.write(f"Likes by non-followers: {likes_by_non_followers} ({likes_by_non_followers/total_likes*100:.2f}%)")
+    st.write(
+        f"Likes by followers: {likes_by_followers} ({likes_by_followers/total_likes*100:.2f}%)"
+    )
+    st.write(
+        f"Likes by non-followers: {likes_by_non_followers} ({likes_by_non_followers/total_likes*100:.2f}%)"
+    )
 
     follower_like_counts_series = pd.Series(follower_like_counts)
-    follower_like_counts_df = follower_like_counts_series[follower_like_counts_series.index.isin(follower_names)].reset_index()
-    follower_like_counts_df.columns = ['follower', 'likes']
-    follower_like_counts_df = follower_like_counts_df[follower_like_counts_df['likes'] > 0]
+    follower_like_counts_df = follower_like_counts_series[
+        follower_like_counts_series.index.isin(follower_names)
+    ].reset_index()
+    follower_like_counts_df.columns = ["follower", "likes"]
+    follower_like_counts_df = follower_like_counts_df[
+        follower_like_counts_df["likes"] > 0
+    ]
 
-    non_follower_like_counts_df = likes_df[~likes_df["actor_uuid"].isin(follower_names)]["actor_uuid"].value_counts().reset_index()
-    non_follower_like_counts_df.columns = ['actor', 'likes']
+    non_follower_like_counts_df = (
+        likes_df[~likes_df["actor_uuid"].isin(follower_names)]["actor_uuid"]
+        .value_counts()
+        .reset_index()
+    )
+    non_follower_like_counts_df.columns = ["actor", "likes"]
+    col1, col2 = st.columns(2)
 
-    st.subheader("Distribution of Likes by Followers")
-    follower_likes_summary = follower_like_counts_df.groupby('likes')['follower'].count().reset_index()
-    follower_likes_summary.columns = ['likes', 'count']
-    follower_likes_summary['percentage'] = (follower_likes_summary['count'] / total_followers) * 100
+    with col1:
+        st.subheader(
+            "Distribution of Likes by Followers",
+            help="Shows what № of followers left what amount of likes and their percentage out of total amount of followers",
+        )
+        follower_likes_summary = (
+            follower_like_counts_df.groupby("likes")["follower"].count().reset_index()
+        )
+        follower_likes_summary.columns = ["likes", "count"]
+        follower_likes_summary["percentage"] = (
+            follower_likes_summary["count"] / total_followers
+        ) * 100
+        st.dataframe(follower_likes_summary, hide_index=True)
 
-    st.dataframe(follower_likes_summary, hide_index = True)
+    with col2:
+        st.subheader(
+            "Distribution of Likes by Non-Followers",
+            help="Shows what № of non-followers left what amount of likes and their percentage out of total amount of followers",
+        )
+        non_follower_likes_summary = (
+            non_follower_like_counts_df.groupby("likes")["actor"].count().reset_index()
+        )
+        non_follower_likes_summary.columns = ["likes", "count"]
+        non_follower_likes_summary["percentage"] = (
+            non_follower_likes_summary["count"]
+            / (len(users_with_likes) - total_followers)
+        ) * 100
+        st.dataframe(non_follower_likes_summary, hide_index=True)
 
-    st.subheader("Distribution of Likes by Non-Followers")
-    non_follower_likes_summary = non_follower_like_counts_df.groupby('likes')['actor'].count().reset_index()
-    non_follower_likes_summary.columns = ['likes', 'count']
-    non_follower_likes_summary['percentage'] = (non_follower_likes_summary['count'] / (len(users_with_likes) - total_followers)) * 100
-
-    st.dataframe(non_follower_likes_summary, hide_index = True)
 
 def load_data(session, followers):
     offset = 0
@@ -145,7 +184,14 @@ def load_data(session, followers):
 
         offset += LIMIT
 
-    return user_likes, user_comments, resource_comments, resource_collected, follower_like_counts, user_is_follower
+    return (
+        user_likes,
+        user_comments,
+        resource_comments,
+        resource_collected,
+        follower_like_counts,
+        user_is_follower,
+    )
 
 
 def main():
@@ -181,12 +227,13 @@ def main():
                 {
                     "User": list(user_likes.keys()),
                     "Likes": [sum(counter.values()) for counter in user_likes.values()],
-                    "is_follower": [user_is_follower[user] for user in user_likes.keys()],
+                    "is_follower": [
+                        user_is_follower[user] for user in user_likes.keys()
+                    ],
                 }
             )
             likes_df = likes_df.sort_values(by="Likes", ascending=False)
             st.dataframe(likes_df, hide_index=True)
-
 
         with col2:
             st.subheader("Comments by user:")
@@ -194,7 +241,9 @@ def main():
                 {
                     "User": list(user_comments.keys()),
                     "Comments": list(user_comments.values()),
-                    "is_follower": [user_is_follower[user] for user in user_comments.keys()],
+                    "is_follower": [
+                        user_is_follower[user] for user in user_comments.keys()
+                    ],
                 }
             )
             comments_df = comments_df.sort_values(by="Comments", ascending=False)
@@ -210,14 +259,18 @@ def main():
             resource_comments_df = resource_comments_df.sort_values(
                 by="Comments", ascending=False
             )
-            st.dataframe(resource_comments_df, hide_index=True)
-
-            most_commented_resource_uuid = resource_comments_df.iloc[0]["Resource UUID"]
-            most_comments_count = resource_comments_df.iloc[0]["Comments"]
-
-            st.subheader("Most Commented Post:")
-            st.write(f"Post ID: {most_commented_resource_uuid}")
-            st.write(f"Number of Comments: {most_comments_count}")
+            resource_comments_df["Resource UUID"] = (
+                "https://yodayo.com/posts/" + resource_comments_df["Resource UUID"]
+            )
+            column_config = {
+                "Resource UUID": st.column_config.LinkColumn(
+                    "Link",
+                    display_text="https://yodayo\.com/posts/(.*?)/",
+                )
+            }
+            st.dataframe(
+                resource_comments_df, hide_index=True, column_config=column_config
+            )
 
         col4 = st.columns(1)[0]
         with col4:
@@ -226,23 +279,33 @@ def main():
                 resource_collected, orient="index"
             ).reset_index()
             resource_collected_df.columns = ["Resource UUID", "Collected"]
-
             resource_collected_df = resource_collected_df.sort_values(
                 by="Collected", ascending=False
             )
-            st.dataframe(resource_collected_df, hide_index=True)
+            resource_collected_df["Resource UUID"] = (
+                "https://yodayo.com/posts/" + resource_collected_df["Resource UUID"]
+            )
 
-            most_collected_resource_uuid = resource_collected_df.iloc[0]["Resource UUID"]
+            column_config = {
+                "Resource UUID": st.column_config.LinkColumn(
+                    "Link", display_text="https://yodayo\.com/posts/(.*?)/"
+                )
+            }
+            st.dataframe(
+                resource_collected_df, hide_index=True, column_config=column_config
+            )
+            most_collected_resource_uuid = resource_collected_df.iloc[0][
+                "Resource UUID"
+            ]
             most_collected_count = resource_collected_df.iloc[0]["Collected"]
 
             st.subheader("Most Collected Post:")
             st.write(f"Post ID: {most_collected_resource_uuid}")
-            st.write(f"Number of Collections: {most_collected_count}")
-
+            st.write(f"№ of Collections: {most_collected_count}")
             st.subheader("User Interaction Statistics:")
-            st.write(f"Number of Users who Liked: {len(user_likes)}")
-            st.write(f"Number of Users who Commented: {len(user_comments)}")
-            st.write(f"Number of Users who Collected: {len(resource_collected)}")
+            st.write(f"№ of Unique Users who Liked: {len(user_likes)}")
+            st.write(f"№ of Unique Users who Commented: {len(user_comments)}")
+            st.write(f"№ of Users who Collected: {len(resource_collected)}")
 
         average_likes_per_user = total_likes / len(user_likes)
         st.subheader("Average Likes per User")
@@ -270,10 +333,8 @@ def main():
                 st.write(f"{percentile}th percentile: {rounded_value}")
 
         likes_df = generate_likes_dataframe(user_likes)
-        st.subheader("Likes by User:")
+        st.subheader("Likes by User:", help="Shows all notifications in order")
         st.dataframe(likes_df, hide_index=True)
-
-
         analyze_likes(user_likes, followers, follower_like_counts)
         end_time = time.perf_counter()
         execution_time = end_time - start_time
@@ -281,6 +342,7 @@ def main():
 
     else:
         st.warning("Enter your access token and user ID:")
+
 
 if __name__ == "__main__":
     main()
