@@ -38,37 +38,56 @@ def process_collected_notification(notification, resource_collected):
     resource_collected[resource_uuid] += 1
 
 
+@st.cache_data(ttl=7200)
 def generate_likes_dataframe(user_likes):
-    liked_data = []
+    liked_data = [
+        (user, resource_uuid, created_at, count)
+        for user, liked_posts in user_likes.items()
+        for (resource_uuid, created_at), count in liked_posts.items()
+    ]
 
-    for user, liked_posts in user_likes.items():
-        for (resource_uuid, created_at), count in liked_posts.items():
-            liked_data.extend(
-                [
-                    {
-                        "actor_uuid": user,
-                        "resource_uuid": resource_uuid,
-                        "created_at": created_at,
-                    }
-                ]
-                * count
-            )
-
-    likes_df = pd.DataFrame(liked_data)
+    likes_df = pd.DataFrame(
+        liked_data, columns=["actor_uuid", "resource_uuid", "created_at", "count"]
+    )
+    likes_df = likes_df.explode("count").reset_index(drop=True)
     likes_df["created_at"] = pd.to_datetime(likes_df["created_at"])
     likes_df = likes_df.sort_values(by="created_at", ascending=False)
+    likes_df["resource_uuid"] = "https://yodayo.com/posts/" + likes_df["resource_uuid"]
 
     return likes_df
 
 
-def get_followers(session, user_id):
+@st.cache_data(ttl=7200)
+def generate_comments_dataframe(user_comments, user_is_follower, notifications):
+    comments_data = [
+        {
+            "actor_uuid": notification["user_profile"]["name"],
+            "resource_uuid": notification["resource_uuid"],
+            "created_at": notification["created_at"],
+            "is_follower": user_is_follower[notification["user_profile"]["name"]],
+        }
+        for notification in notifications
+        if notification["action"] == "commented"
+    ]
+
+    comments_df = pd.DataFrame(comments_data)
+    comments_df["created_at"] = pd.to_datetime(comments_df["created_at"])
+    comments_df = comments_df.sort_values(by="created_at", ascending=False)
+    comments_df["resource_uuid"] = (
+        "https://yodayo.com/posts/" + comments_df["resource_uuid"]
+    )
+    return comments_df
+
+
+@st.cache_data(ttl=7200)
+def get_followers(_session, user_id):
     followers = []
     offset = 0
     limit = 500
     while True:
         followers_url = f"https://api.yodayo.com/v1/users/{user_id}/followers"
         params = {"offset": offset, "limit": limit, "width": 600, "include_nsfw": True}
-        resp = session.get(followers_url, params=params)
+        resp = _session.get(followers_url, params=params)
         follower_data = resp.json()
         followers.extend([user["profile"]["name"] for user in follower_data["users"]])
         if len(follower_data["users"]) < limit:
@@ -77,6 +96,7 @@ def get_followers(session, user_id):
     return followers
 
 
+@st.cache_data(ttl=7200)
 def analyze_likes(user_likes, followers, follower_like_counts):
     likes_df = generate_likes_dataframe(user_likes)
     follower_names = set(followers)
@@ -149,7 +169,8 @@ def analyze_likes(user_likes, followers, follower_like_counts):
         st.dataframe(non_follower_likes_summary, hide_index=True)
 
 
-def load_data(session, followers):
+@st.cache_data(ttl=7200)
+def load_data(_session, followers):
     offset = 0
     user_likes = defaultdict(Counter)
     user_comments = Counter()
@@ -157,27 +178,41 @@ def load_data(session, followers):
     resource_collected = Counter()
     follower_like_counts = Counter()
     user_is_follower = defaultdict(bool)
+    notifications = []
 
     for follower in followers:
         user_is_follower[follower] = True
 
     while True:
-        resp = session.get(API_URL, params={"offset": offset, "limit": LIMIT})
+        resp = _session.get(API_URL, params={"offset": offset, "limit": LIMIT})
         data = resp.json()
 
-        for notification in data.get("notifications", []):
-            if notification["action"] == "liked" and notification.get("resource_media"):
-                process_liked_notification(notification, user_likes)
-                name = notification["user_profile"]["name"]
-                follower_like_counts[name] += 1
+        notifications.extend(data.get("notifications", []))
 
-            if notification["action"] == "commented":
-                process_commented_notification(
-                    notification, user_comments, resource_comments
-                )
+        liked_notifications = [
+            n
+            for n in data.get("notifications", [])
+            if n["action"] == "liked" and n.get("resource_media")
+        ]
+        commented_notifications = [
+            n for n in data.get("notifications", []) if n["action"] == "commented"
+        ]
+        collected_notifications = [
+            n for n in data.get("notifications", []) if n["action"] == "collected"
+        ]
 
-            if notification["action"] == "collected":
-                process_collected_notification(notification, resource_collected)
+        for notification in liked_notifications:
+            process_liked_notification(notification, user_likes)
+            name = notification["user_profile"]["name"]
+            follower_like_counts[name] += 1
+
+        for notification in commented_notifications:
+            process_commented_notification(
+                notification, user_comments, resource_comments
+            )
+
+        for notification in collected_notifications:
+            process_collected_notification(notification, resource_collected)
 
         if len(data.get("notifications", [])) < LIMIT:
             break
@@ -191,6 +226,7 @@ def load_data(session, followers):
         resource_collected,
         follower_like_counts,
         user_is_follower,
+        notifications,
     )
 
 
@@ -201,7 +237,6 @@ def main():
     if access_token and user_id:
         session = authenticate_with_token(access_token)
         followers = get_followers(session, user_id)
-
         start_time = time.perf_counter()
         (
             user_likes,
@@ -210,17 +245,15 @@ def main():
             resource_collected,
             follower_like_counts,
             user_is_follower,
+            notifications,
         ) = load_data(session, followers)
 
         total_likes = sum(len(posts) for posts in user_likes.values())
         total_comments = sum(user_comments.values())
-
         st.subheader("Total Likes and Comments")
         st.write(f"Total Likes: {total_likes}")
         st.write(f"Total Comments: {total_comments}")
-
         col1, col2 = st.columns(2)
-
         with col1:
             st.subheader("Likes by user:")
             likes_df = pd.DataFrame(
@@ -310,7 +343,6 @@ def main():
         average_likes_per_user = total_likes / len(user_likes)
         st.subheader("Average Likes per User")
         st.write(f"Average Likes per User: {average_likes_per_user:.2f}")
-
         st.subheader("Percentile:")
         percentiles = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
         percentiles_values_likes = np.percentile(likes_df["Likes"], percentiles)
@@ -333,8 +365,37 @@ def main():
                 st.write(f"{percentile}th percentile: {rounded_value}")
 
         likes_df = generate_likes_dataframe(user_likes)
+        comments_df = generate_comments_dataframe(
+            user_comments, user_is_follower, notifications
+        )
+        column_config = {
+            "actor_uuid": st.column_config.TextColumn(
+                "Name",
+            ),
+            "resource_uuid": st.column_config.LinkColumn(
+                "Link", display_text="https://yodayo\.com/posts/(.*?)/"
+            ),
+        }
         st.subheader("Likes by User:", help="Shows all notifications in order")
-        st.dataframe(likes_df, hide_index=True)
+        st.dataframe(likes_df, hide_index=True, column_config=column_config)
+        st.subheader("Comments by User:")
+        query = st.text_input("Search comments by user")
+        if query:
+            mask = comments_df.applymap(lambda x: query.lower() in str(x).lower()).any(
+                axis=1
+            )
+            filtered_comments_df = comments_df[mask]
+        else:
+            filtered_comments_df = comments_df
+        column_config = {
+            "actor_uuid": st.column_config.TextColumn(
+                "Name",
+            ),
+            "resource_uuid": st.column_config.LinkColumn(
+                "Link", display_text="https://yodayo\.com/posts/(.*?)/"
+            ),
+        }
+        st.dataframe(filtered_comments_df, hide_index=True, column_config=column_config)
         analyze_likes(user_likes, followers, follower_like_counts)
         end_time = time.perf_counter()
         execution_time = end_time - start_time
