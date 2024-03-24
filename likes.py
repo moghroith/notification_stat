@@ -246,7 +246,11 @@ def get_column_config():
         "resource_uuid": st.column_config.LinkColumn(
             "Link", display_text="https://yodayo\.com/posts/(.*?)/"
         ),
+        "Resource UUID": st.column_config.LinkColumn(
+            "Link", display_text="https://yodayo\.com/posts/(.*?)/"
+        ),
     }
+
 
 def main():
     access_token = st.text_input("Enter your access token")
