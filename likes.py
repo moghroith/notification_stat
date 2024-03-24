@@ -41,15 +41,14 @@ def process_collected_notification(notification, resource_collected):
 @st.cache_data(ttl=7200)
 def generate_likes_dataframe(user_likes):
     liked_data = [
-        (user, resource_uuid, created_at, count)
+        (user, resource_uuid, created_at)
         for user, liked_posts in user_likes.items()
-        for (resource_uuid, created_at), count in liked_posts.items()
+        for (resource_uuid, created_at) in liked_posts.keys()
     ]
 
     likes_df = pd.DataFrame(
-        liked_data, columns=["actor_uuid", "resource_uuid", "created_at", "count"]
+        liked_data, columns=["actor_uuid", "resource_uuid", "created_at"]
     )
-    likes_df = likes_df.explode("count").reset_index(drop=True)
     likes_df["created_at"] = pd.to_datetime(likes_df["created_at"])
     likes_df = likes_df.sort_values(by="created_at", ascending=False)
     likes_df["resource_uuid"] = "https://yodayo.com/posts/" + likes_df["resource_uuid"]
@@ -239,6 +238,7 @@ def display_top_users_stats(likes_df, percentile, total_likes):
     st.write(
         f"{len(top_users)} users ({pct_top_users:.1f}% of all users) contributed {pct_likes_top_users:.1f}% of total likes"
     )
+
 
 def get_column_config():
     return {
