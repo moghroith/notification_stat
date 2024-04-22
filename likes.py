@@ -178,6 +178,7 @@ def load_data(_session, followers):
     follower_like_counts = Counter()
     user_is_follower = defaultdict(bool)
     notifications = []
+    user_collected = Counter()
 
     for follower in followers:
         user_is_follower[follower] = True
@@ -212,6 +213,8 @@ def load_data(_session, followers):
 
         for notification in collected_notifications:
             process_collected_notification(notification, resource_collected)
+            user_name = notification["user_profile"]["name"]
+            user_collected[user_name] += 1
 
         if len(data.get("notifications", [])) < LIMIT:
             break
@@ -226,6 +229,7 @@ def load_data(_session, followers):
         follower_like_counts,
         user_is_follower,
         notifications,
+        user_collected,
     )
 
 
@@ -268,8 +272,15 @@ def main():
             follower_like_counts,
             user_is_follower,
             notifications,
+            user_collected,
         ) = load_data(session, followers)
 
+        collected_user_names = set()
+        for notification in notifications:
+            if notification["action"] == "collected":
+                collected_user_names.add(notification["user_profile"]["name"])
+
+        num_users_collected = len(collected_user_names)
         total_likes = sum(len(posts) for posts in user_likes.values())
         total_comments = sum(user_comments.values())
         st.subheader("Total Likes and Comments")
@@ -320,6 +331,18 @@ def main():
             st.dataframe(
                 resource_comments_df, hide_index=True, column_config=column_config
             )
+            st.subheader("Collected by user:")
+            collected_df = pd.DataFrame(
+                {
+                    "User": list(user_collected.keys()),
+                    "Collected": list(user_collected.values()),
+                    "is_follower": [
+                        user_is_follower[user] for user in user_collected.keys()
+                    ],
+                }
+            )
+            collected_df = collected_df.sort_values(by="Collected", ascending=False)
+            st.dataframe(collected_df, hide_index=True)
 
         col4 = st.columns(1)[0]
         with col4:
@@ -349,7 +372,7 @@ def main():
             st.subheader("User Interaction Statistics:")
             st.write(f"№ of Unique Users who Liked: {len(user_likes)}")
             st.write(f"№ of Unique Users who Commented: {len(user_comments)}")
-            st.write(f"№ of Users who Collected: {len(resource_collected)}")
+            st.write(f"№ of Users who Collected: {num_users_collected}")
 
         average_likes_per_user = total_likes / len(user_likes)
         st.subheader("Average Likes per User")
